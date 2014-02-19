@@ -37,7 +37,11 @@ var KDF = lib.KDF,
 var keychain = function() {
   // Class-private instance variables.
   var priv = {
-    secrets: { /* Your secrets here */ },
+      secrets: {k: 0,
+                k1: 0,
+                k2: 0,
+                k3: 0,
+                k4: 0},
     data: { /* Non-secret data here */ }
   };
 
@@ -59,6 +63,12 @@ var keychain = function() {
     */
   keychain.init = function(password) {
     priv.data.version = "CS 255 Password Manager v1.0";
+    ready = true;
+    priv.secrets.k = KDF(password, "0");
+    priv.secrets.k1 = HMAC(priv.secrets.k, string_to_bitarray("aparna"));   //For HMACS of domains
+    priv.secrets.k2 = HMAC(priv.secrets.k, string_to_bitarray("sujeet"));  //For MAC of passwords
+    priv.secrets.k3 = HMAC(priv.secrets.k, string_to_bitarray("crypto"));  //For final encryption
+    priv.secrets.k4 = HMAC(priv.secrets.k, string_to_bitarray("stanford"));
   };
 
   /**
@@ -79,7 +89,29 @@ var keychain = function() {
     * Return Type: boolean
     */
   keychain.load = function(password, repr, trusted_data_check) {
-    throw "Not implemented!";
+    var k_derived = KDF(password, "0");
+    var k2_derived = HMAC(k_derived, "crypto");
+    var ciphertext_structure = setup_cipher(bitarray_slice(k2_derived, 0, 128));
+    var encrypted_kvs = JSON.parse(repr);
+    var kvs;
+
+    //Check if master password is valid
+    try {
+        kvs = dec_gcm(ciphertext_structure, encrypted_kvs);
+    }
+    catch(e) {
+        throw "Incorrect Password";
+        return false;
+    }
+    //Check for integrity
+    var check_tag = SHA256(kvs);
+    if(bitarray_to_string(check_tag) != trusted_data_check) {
+        throw "KVS has been tampered with";
+        return false;
+    }
+
+    keychain = JSON.parse(kvs);
+    return true;    
   };
 
   /**
@@ -96,7 +128,16 @@ var keychain = function() {
     * Return Type: array
     */ 
   keychain.dump = function() {
-    throw "Not implemented!";
+    var arr = new Array();
+    var kvs_string = JSON.stringify(keychain);
+    var ciphertext_structure = setup_cipher(bitarray_slice(priv.secrets.k3, 0, 128));
+    var encrypted_kvs = enc_gcm(ciphertext_structure, string_to_bitarray(kvs_string));
+    var check_tag = SHA256(encrypted_kvs);
+    arr[0] = JSON.stringify(encrypted_kvs);
+    arr[1] = check_tag;
+
+    return arr
+
   }
 
   /**
@@ -110,7 +151,22 @@ var keychain = function() {
     * Return Type: string
     */
   keychain.get = function(name) {
-    throw "Not implemented!";
+    if(!ready)
+        throw "Not ready";
+
+    var domain = HMAC(priv.secrets.k1, name);
+    if(domain in keychain) {
+        var encrypted_password = keychain[domain];
+        var ciphertext_structure = setup_cipher(bitarray_slice(priv.secrets.k2, 0, 128));
+        try {
+            var password = dec_gcm(ciphertext_structure, encrypted_password);
+            return bitarray_to_string(password);
+        } catch(e) {
+            throw "Password has been tampered with";
+        }
+    }
+    else
+        return null;
   }
 
   /** 
@@ -125,7 +181,16 @@ var keychain = function() {
   * Return Type: void
   */
   keychain.set = function(name, value) {
-    throw "Not implemented!";
+      if(!ready)
+          throw "Not ready";
+      var domain = HMAC(priv.secrets.k1, name);
+      var ciphertext_structure1 = setup_cipher(bitarray_slice(priv.secrets.k2, 0, 128));
+      var encrypted_password = enc_gcm(ciphertext_structure1, string_to_bitarray(value));
+      var domain_password = bitarray_concat(domain, encrypted_password);
+      var ciphertext_structure2 = setup_cipher(bitarray_slice(priv.secrets.k4, 0, 128));
+      //var tag = enc_gcm(ciphertext_structure2, domain_password);
+      keychain[domain] = encrypted_password;
+      //keychain[domain] = bitarray_concat(encrypted_password,tag);
   }
 
   /**
@@ -138,8 +203,16 @@ var keychain = function() {
     * Return Type: boolean
   */
   keychain.remove = function(name) {
-    throw "Not implemented!";
-  }
+      if(!ready)
+          throw "Not ready";
+      var domain = HMAC(priv.secrets.k1, name);
+      if(domain in keychain) {
+          delete keychain[domain];
+          return true;
+      }
+      else
+          return false;
+      }
 
   return keychain;
 }
