@@ -1,0 +1,60 @@
+CS 255: Intro to Cryptography
+Programming Assignment 2
+
+Names:  Aparna Krishnan (aparnak)
+        Sujeet Gholap   (sujeet)
+
+1) Method used for preventing the adversary from learning information about the lengths of the passwords stored in the password manager
+Ans:
+It is given that the maximum length of the passwords is 64 bytes. We propose a method where the length of every password stored is 65 bytes.
+The method used to implement this is described below:
+
+L = Length of the given given_password
+64 - L = Length of padding required
+L <= 64
+
+The password is now represented as:
+padded_password = <given_password><padding of '_'><ascii value of L>
+                         L             64-L             1
+
+eg: given_password = "crypto"
+L = 6
+padded_password = "crypto"+"___________"+"X" where ascii("X") = 6
+                             58 times
+
+Hence, every password is now represented as a (L + 64-L + 1 = 65) bytes string.
+
+For recovering the actual password from the padded password, we should follow the method given below:
+
+L = ascii value of character at position 65 of padded_password
+given_password = characters of padded_password from position 1 to L
+
+As every password is represented with the same length (65), the adversary cannot learn any information about the lengths of the password.
+
+
+2) Method used for preventing swap attacks
+Ans:
+The swap attack corresponds to an attack where the adversary interchanges the values corresponding to different keys. This basically means that we should protect the integrity of every record (domain + password). The method used to defend against swap attacks is described below:
+
+Each record is stored as follows:
+HMAC(key_domain, domain_name) -> GCM(key_record, domain_name||padded_password)
+
+The password is recovered for any domain_name by decrypting using GCM and stripping off the domain_name
+
+Proof that this method defends against swap attacks:
+KVS has
+domain1 -> passwd1
+domain2 -> passwd2
+
+GCM is secure
+Assume that the adversary is able to perform a swap attack.
+domain1 -> passwd2
+
+This implies that, the adversary was able to come up with GCM(key_record, domain1||passwd2) given GCM(key_record, domain1||passwd1), 
+GCM(key_record, domain2||passwd2). That is, the adversary was able to predict the output of GCM for a completely new input.
+
+This breaks the the security of GCM (producing a new (value, tag) pair breaks the MAC), which is a contradiction as GCM is secure.
+Hence, the given method protects against swap attacks.
+
+
+
