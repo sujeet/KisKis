@@ -5,216 +5,304 @@
 
 var lib = require("./lib");
 
-var KDF = lib.KDF,
-    HMAC = lib.HMAC,
-    SHA256 = lib.SHA256,
-    setup_cipher = lib.setup_cipher,
-    enc_gcm = lib.enc_gcm,
-    dec_gcm = lib.dec_gcm,
-    bitarray_slice = lib.bitarray_slice,
-    bitarray_to_string = lib.bitarray_to_string,
-    string_to_bitarray = lib.string_to_bitarray,
-    bitarray_to_hex = lib.bitarray_to_hex,
-    hex_to_bitarray = lib.hex_to_bitarray,
-    bitarray_to_base64 = lib.bitarray_to_base64,
-    base64_to_bitarray = lib.base64_to_bitarray,
-    byte_array_to_hex = lib.byte_array_to_hex,
-    hex_to_byte_array = lib.hex_to_byte_array,
-    string_to_padded_byte_array = lib.string_to_padded_byte_array,
-    string_to_padded_bitarray = lib.string_to_padded_bitarray,
-    string_from_padded_byte_array = lib.string_from_padded_byte_array,
-    string_from_padded_bitarray = lib.string_from_padded_bitarray,
-    random_bitarray = lib.random_bitarray,
-    bitarray_equal = lib.bitarray_equal,
-    bitarray_len = lib.bitarray_len,
-    bitarray_concat = lib.bitarray_concat,
-    dict_num_keys = lib.dict_num_keys;
+var KDF = lib.KDF;
+var HMAC = lib.HMAC;
+var SHA256 = lib.SHA256;
+var setup_cipher = lib.setup_cipher;
+var enc_gcm = lib.enc_gcm;
+var dec_gcm = lib.dec_gcm;
+var bitarray_slice = lib.bitarray_slice;
+var bitarray_to_string = lib.bitarray_to_string;
+var string_to_bitarray = lib.string_to_bitarray;
+var bitarray_to_hex = lib.bitarray_to_hex;
+var hex_to_bitarray = lib.hex_to_bitarray;
+var bitarray_to_base64 = lib.bitarray_to_base64;
+var base64_to_bitarray = lib.base64_to_bitarray;
+var byte_array_to_hex = lib.byte_array_to_hex;
+var hex_to_byte_array = lib.hex_to_byte_array;
+var string_to_padded_byte_array = lib.string_to_padded_byte_array;
+var string_to_padded_bitarray = lib.string_to_padded_bitarray;
+var string_from_padded_byte_array = lib.string_from_padded_byte_array;
+var string_from_padded_bitarray = lib.string_from_padded_bitarray;
+var random_bitarray = lib.random_bitarray;
+var bitarray_equal = lib.bitarray_equal;
+var bitarray_len = lib.bitarray_len;
+var bitarray_concat = lib.bitarray_concat;
+var dict_num_keys = lib.dict_num_keys;
 
 
 /********* Implementation ********/
 
 
 var keychain = function() {
-  // Class-private instance variables.
-  var priv = {
-      secrets: {k: 0,
-                k1: 0,
-                k2: 0,
-                k3: 0,
-                k4: 0},
-    data: { /* Non-secret data here */ }
-  };
+    // Class-private instance variables.
+    var priv = {
+        secrets: {
+            k: 0,
+            key_domain: 0,
+            key_password: 0,
+            key_data: 0,
+            key_unknown: 0
+        },
+        data: { /* Non-secret data here */ }
+    };
 
-  // Maximum length of each record in bytes
-  var MAX_PW_LEN_BYTES = 64;
-  
-  // Flag to indicate whether password manager is "ready" or not
-  var ready = false;
+    // Maximum length of each record in bytes
+    var MAX_PW_LEN_BYTES = 64;
+    
+    // Flag to indicate whether password manager is "ready" or not
+    var ready = false;
 
-  var keychain = {};
+    var keychain = {};
+    
+    // Master key to generate other keys.
+    // Other keys are generated using HMAC.
+    // HMAC is a PRP, so the generated keys are
+    // random too. (indistinguishable from random)
+    // We need a 256 bit key for that.
+    keychain.get_master_key = function (password) {
+        return KDF (password, "master key");
+    };
 
-  /** 
-    * Creates an empty keychain with the given password. Once init is called,
-    * the password manager should be in a ready state.
-    *
-    * Arguments:
-    *   password: string
-    * Return Type: void
-    */
-  keychain.init = function(password) {
-    priv.data.version = "CS 255 Password Manager v1.0";
-    ready = true;
-    priv.secrets.k = KDF(password, "0");
-    priv.secrets.k1 = HMAC(priv.secrets.k, string_to_bitarray("aparna"));   //For HMACS of domains
-    priv.secrets.k2 = HMAC(priv.secrets.k, string_to_bitarray("sujeet"));  //For MAC of passwords
-    priv.secrets.k3 = HMAC(priv.secrets.k, string_to_bitarray("crypto"));  //For final encryption
-    priv.secrets.k4 = HMAC(priv.secrets.k, string_to_bitarray("stanford"));
-  };
+    keychain.get_domain_hmac_key = function (master_key) {
+        // 256 bit key for HMAC
+        return HMAC (
+            master_key,
+            string_to_bitarray("hmac the domain")
+        );
+    };
+    
+    keychain.get_enc_key = function (master_key, unique_string) {
+        // returns SJCL's internal cipher data structure
+        // to be used with GCM
+        return setup_cipher (
+            bitarray_slice (
+                HMAC (
+                    master_key,
+                    string_to_bitarray (unique_string)
+                ),
+                0,
+                128
+            )
+        ); 
+    };
+    
+    keychain.get_password_enc_key = function (master_key) {
+        return keychain.get_enc_key (master_key, "encrypt password");
+    };
 
-  /**
-    * Loads the keychain state from the provided representation (repr). The
-    * repr variable will contain a JSON encoded serialization of the contents
-    * of the KVS (as returned by the save function). The trusted_data_check
-    * is an *optional* SHA-256 checksum that can be used to validate the 
-    * integrity of the contents of the KVS. If the checksum is provided and the
-    * integrity check fails, an exception should be thrown. You can assume that
-    * the representation passed to load is well-formed (e.g., the result of a 
-    * call to the save function). Returns true if the data is successfully loaded
-    * and the provided password is correct. Returns false otherwise.
-    *
-    * Arguments:
-    *   password:           string
-    *   repr:               string
-    *   trusted_data_check: string
-    * Return Type: boolean
-    */
-  keychain.load = function(password, repr, trusted_data_check) {
-    var k_derived = KDF(password, "0");
-    var k2_derived = HMAC(k_derived, "crypto");
-    var ciphertext_structure = setup_cipher(bitarray_slice(k2_derived, 0, 128));
-    var encrypted_kvs = JSON.parse(repr);
-    var kvs;
+    keychain.get_record_enc_key = function (master_key) {
+        return keychain.get_enc_key (master_key, "encrypt record");
+    };
+    
+    keychain.get_data_enc_key = function (master_key) {
+        return keychain.get_enc_key (master_key, "encrypt keychain");
+    };
 
-    //Check if master password is valid
-    try {
-        kvs = dec_gcm(ciphertext_structure, encrypted_kvs);
-    }
-    catch(e) {
-        throw "Incorrect Password";
-        return false;
-    }
-    //Check for integrity
-    var check_tag = SHA256(kvs);
-    if(bitarray_to_string(check_tag) != trusted_data_check) {
-        throw "KVS has been tampered with";
-        return false;
-    }
+    keychain.init_keys = function (password) {
+        priv.secrets.key_master = keychain.get_master_key (password);
+        
+        priv.secrets.key_domain = keychain.get_domain_hmac_key (
+            priv.secrets.key_master
+        );
 
-    keychain = JSON.parse(kvs);
-    return true;    
-  };
+        priv.secrets.key_password = keychain.get_password_enc_key (
+            priv.secrets.key_master
+        );
 
-  /**
-    * Returns a JSON serialization of the contents of the keychain that can be 
-    * loaded back using the load function. The return value should consist of
-    * an array of two strings:
-    *   arr[0] = JSON encoding of password manager
-    *   arr[1] = SHA-256 checksum
-    * As discussed in the handout, the first element of the array should contain
-    * all of the data in the password manager. The second element is a SHA-256
-    * checksum computed over the password manager to preserve integrity. If the
-    * password manager is not in a ready-state, return null.
-    *
-    * Return Type: array
-    */ 
-  keychain.dump = function() {
-    var arr = new Array();
-    var kvs_string = JSON.stringify(keychain);
-    var ciphertext_structure = setup_cipher(bitarray_slice(priv.secrets.k3, 0, 128));
-    var encrypted_kvs = enc_gcm(ciphertext_structure, string_to_bitarray(kvs_string));
-    var check_tag = SHA256(encrypted_kvs);
-    arr[0] = JSON.stringify(encrypted_kvs);
-    arr[1] = check_tag;
+        priv.secrets.key_record = keychain.get_record_enc_key (
+            priv.secrets.key_master
+        );
 
-    return arr
+        priv.secrets.key_data = keychain.get_data_enc_key (
+            priv.secrets.key_master
+        );
+    };
 
-  }
+    /** 
+     * Creates an empty keychain with the given password. Once init is called,
+     * the password manager should be in a ready state.
+     *
+     * Arguments:
+     *   password: string
+     * Return Type: void
+     */
+    keychain.init = function (password) {
+        priv.data.version = "CS 255 Password Manager v1.0";
+        keychain.init_keys (password);
+        ready = true;
+    };
 
-  /**
-    * Fetches the data (as a string) corresponding to the given domain from the KVS.
-    * If there is no entry in the KVS that matches the given domain, then return
-    * null. If the password manager is not in a ready state, throw an exception. If
-    * tampering has been detected with the records, throw an exception.
-    *
-    * Arguments:
-    *   name: string
-    * Return Type: string
-    */
-  keychain.get = function(name) {
-    if(!ready)
-        throw "Not ready";
+    /**
+     * Loads the keychain state from the provided representation (repr). The
+     * repr variable will contain a JSON encoded serialization of the contents
+     * of the KEYCHAIN (as returned by the save function). The trusted_data_check
+     * is an *optional* SHA-256 checksum that can be used to validate the 
+     * integrity of the contents of the KEYCHAIN.
+     * 
+     * If the checksum is provided and the integrity check fails,
+     * an exception should be thrown. 
+     * 
+     * You can assume that the representation passed to load is well-formed 
+     * (e.g., the result of a call to the save function). Returns true if
+     * the data is successfully loaded and the provided password is correct.
+     * Returns false otherwise.
+     *
+     * Arguments:
+     *   password:           string
+     *   repr:               string
+     *   trusted_data_check: string
+     * Return Type: boolean
+     */
+    keychain.load = function (password, repr, trusted_data_check) {
+        var master_key_derived = keychain.get_master_key (password);
+        var data_key_derived = keychain.get_data_enc_key (
+            master_key_derived
+        );
+        var encrypted_data = JSON.parse (repr).encrypted_data;
+        var data_json;
 
-    var domain = HMAC(priv.secrets.k1, name);
-    if(domain in keychain) {
-        var encrypted_password = keychain[domain];
-        var ciphertext_structure = setup_cipher(bitarray_slice(priv.secrets.k2, 0, 128));
+        //Check if master password is valid
         try {
-            var password = dec_gcm(ciphertext_structure, encrypted_password);
-            return bitarray_to_string(password);
-        } catch(e) {
-            throw "Password has been tampered with";
+            data_json = bitarray_to_string (
+                dec_gcm (data_key_derived, encrypted_data)
+            );
         }
-    }
-    else
-        return null;
-  }
+        catch (e) {
+            return false;
+        }
 
-  /** 
-  * Inserts the domain and associated data into the KVS. If the domain is
-  * already in the password manager, this method should update its value. If
-  * not, create a new entry in the password manager. If the password manager is
-  * not in a ready state, throw an exception.
-  *
-  * Arguments:
-  *   name: string
-  *   value: string
-  * Return Type: void
-  */
-  keychain.set = function(name, value) {
-      if(!ready)
-          throw "Not ready";
-      var domain = HMAC(priv.secrets.k1, name);
-      var ciphertext_structure1 = setup_cipher(bitarray_slice(priv.secrets.k2, 0, 128));
-      var encrypted_password = enc_gcm(ciphertext_structure1, string_to_bitarray(value));
-      var domain_password = bitarray_concat(domain, encrypted_password);
-      var ciphertext_structure2 = setup_cipher(bitarray_slice(priv.secrets.k4, 0, 128));
-      //var tag = enc_gcm(ciphertext_structure2, domain_password);
-      keychain[domain] = encrypted_password;
-      //keychain[domain] = bitarray_concat(encrypted_password,tag);
-  }
+        if (trusted_data_check !== undefined) {
+            //Check for integrity
+            var check_tag = SHA256 (encrypted_data);
+            if (! bitarray_equal (trusted_data_check, check_tag)) {
+                throw "KEYCHAIN has been tampered with";
+            }
+        }
+        keychain.init (password);
+        priv.data = JSON.parse (data_json);
+        return true;    
+    };
 
-  /**
-    * Removes the record with name from the password manager. Returns true
-    * if the record with the specified name is removed, false otherwise. If
-    * the password manager is not in a ready state, throws an exception.
-    *
-    * Arguments:
-    *   name: string
-    * Return Type: boolean
-  */
-  keychain.remove = function(name) {
-      if(!ready)
-          throw "Not ready";
-      var domain = HMAC(priv.secrets.k1, name);
-      if(domain in keychain) {
-          delete keychain[domain];
-          return true;
-      }
-      else
-          return false;
-      }
+    /**
+     * Returns a JSON serialization of the contents of the keychain that can
+     * be loaded back using the load function. The return value should
+     * consist of an array of two strings:
+     *   arr[0] = JSON encoding of password manager
+     *   arr[1] = SHA-256 checksum
+     * As discussed in the handout, the first element of the array should
+     * contain all of the data in the password manager. The second element
+     * is a SHA-256 checksum computed over the password manager to preserve
+     * integrity.
+     *
+     * If the password manager is not in a ready-state, return null.
+     *
+     * Return Type: array
+     */ 
+    keychain.dump = function() {
+        if (!ready) return null;
+        
+        var data_string = JSON.stringify (priv.data);
+        var encrypted_data = enc_gcm (priv.secrets.key_data,
+                                      string_to_bitarray (data_string));
+        var hash = SHA256 (encrypted_data);
+        return [JSON.stringify ({encrypted_data:encrypted_data}), hash];
+    };
 
-  return keychain;
-}
+    /**
+     * Fetches the data (as a string)
+     * corresponding to the given domain from the KEYCHAIN.
+     * 
+     * If there is no entry in the KEYCHAIN that matches the given domain,
+     * then return null.
+     * 
+     * If the password manager is not in a ready state, throw an exception.
+     * 
+     * If tampering has been detected with the records, throw an exception.
+     *
+     * Arguments:
+     *   domain_name: string
+     * Return Type: string
+     */
+    keychain.get = function (domain_name) {
+        if (!ready) throw "Not ready";
+
+        var domain_hmac = HMAC (priv.secrets.key_domain, domain_name);
+        
+        if (! (domain_hmac in priv.data)) return null;
+
+        // Recordc exists. Check tampering first.
+        var stored_tag = priv.data [domain_hmac].record_tag;
+        var decrypted_tag = dec_gcm (priv.secrets.key_record, stored_tag);
+        var record = bitarray_concat (
+            domain_hmac, 
+            priv.data [domain_hmac].encrypted_password
+        );
+        if (! bitarray_equal (decrypted_tag, record)) {
+            // Might be a case of swap attack!!
+            throw ("Record for " + domain_name + " was tampered with.");
+        }
+        
+        // No tampering, now return the password.
+        return bitarray_to_string (
+            dec_gcm (
+                priv.secrets.key_password,
+                priv.data [domain_hmac].encrypted_password
+            )
+        );
+    };
+
+    /** 
+     * Inserts the domain and associated data into the KEYCHAIN. If the domain is
+     * already in the password manager, this method should update its value.
+     * If not, create a new entry in the password manager.
+     * If the password manager is not in a ready state, throw an exception.
+     *
+     * Arguments:
+     *   domain_name: string
+     *   password: string
+     * Return Type: void
+     */
+    keychain.set = function (domain_name, password) {
+        if (!ready) throw "Not ready";
+
+        var domain_hmac = HMAC (priv.secrets.key_domain, domain_name);
+        var encrypted_password = enc_gcm (priv.secrets.key_password,
+                                          string_to_bitarray (password));
+        var record_tag = enc_gcm (priv.secrets.key_record,
+                                  bitarray_concat (domain_hmac,
+                                                   encrypted_password));
+        priv.data [domain_hmac] = {
+            encrypted_password : encrypted_password,
+            record_tag: record_tag
+        };
+    };
+
+    /**
+     * Removes the record with name from the password manager.
+     * Returns
+     * true if the record with the specified name is removed,
+     * false otherwise.
+     * 
+     * The password manager is not in a ready state, throws an exception.
+     *
+     * Arguments:
+     *   name: string
+     * Return Type: boolean
+     */
+    keychain.remove = function (domain_name) {
+        if (!ready) throw "Not ready";
+        var domain_hmac = HMAC (priv.secrets.key_domain, domain_name);
+        if (domain_hmac in priv.data) {
+            delete priv.data [domain_hmac];
+            return true;
+        }
+        else {
+            return false;
+        }
+    };
+
+    return keychain;
+};
 
 module.exports.keychain = keychain;
