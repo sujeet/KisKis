@@ -47,13 +47,38 @@ var keychain = function() {
         data: { /* Non-secret data here */ }
     };
 
-    // Maximum length of each record in bytes
+    // Maximum length of each password in bytes.
     var MAX_PW_LEN_BYTES = 64;
     
     // Flag to indicate whether password manager is "ready" or not
     var ready = false;
 
     var keychain = {};
+    
+    // Takes a password of length 64 or less.
+    // Returns a string of exactly 65 length.
+    // The last byte has the length of the original password encoded in ASCII.
+    // First those many bytes are the password itself.
+    // Example:
+    // Password        : "sujeet"
+    // Padded password : "sujeet<58 characters of no concern><chr6>"
+    // Where <chr6> denotes the ascii character with value 6.
+    keychain.pad_password = function (password) {
+        var original_length = password.length;
+        for (var i = password.length;
+             i < MAX_PW_LEN_BYTES;
+             i++) {
+            password += "_";
+        }
+        return password + String.fromCharCode (original_length);
+    };
+    
+    keychain.strip_password = function (padded_password) {
+        return padded_password.slice (
+            0,
+            padded_password.charCodeAt (MAX_PW_LEN_BYTES)
+        );
+    };
     
     // Master key to generate other keys.
     // Other keys are generated using HMAC.
@@ -244,10 +269,12 @@ var keychain = function() {
         }
         
         // No tampering, now return the password.
-        return bitarray_to_string (
-            dec_gcm (
-                priv.secrets.key_password,
-                priv.data [domain_hmac].encrypted_password
+        return keychain.strip_password (
+            bitarray_to_string (
+                dec_gcm (
+                    priv.secrets.key_password,
+                    priv.data [domain_hmac].encrypted_password
+                )
             )
         );
     };
@@ -266,6 +293,7 @@ var keychain = function() {
     keychain.set = function (domain_name, password) {
         if (!ready) throw "Not ready";
 
+        password = keychain.pad_password (password);
         var domain_hmac = HMAC (priv.secrets.key_domain, domain_name);
         var encrypted_password = enc_gcm (priv.secrets.key_password,
                                           string_to_bitarray (password));
