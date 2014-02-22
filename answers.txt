@@ -4,57 +4,235 @@ Programming Assignment 2
 Names:  Aparna Krishnan (aparnak)
         Sujeet Gholap   (sujeet)
 
-1) Method used for preventing the adversary from learning information about the lengths of the passwords stored in the password manager
+1) Method used for preventing the adversary from learning information about
+   the lengths of the passwords stored in the password manager.
 Ans:
-It is given that the maximum length of the passwords is 64 bytes. We propose a method where the length of every password stored is 65 bytes.
-The method used to implement this is described below:
+   It is given that the maximum length of the passwords is 64 bytes.
+   We propose a method where the length of every password stored is 65 bytes.
+   The method used to implement this is described below:
 
-L = Length of the given given_password
-64 - L = Length of padding required
-L <= 64
+   L = Length of the given given_password
+   64 - L = Length of padding required
+   L <= 64
 
-The password is now represented as:
-padded_password = <given_password><padding of '_'><ascii value of L>
-                         L             64-L             1
+   The password is now represented as:
+   padded_password =  <given_password> <padding of '_'> <ascii value of L>
+                     |<------L------->|<-----64-L----->|<--------1------->|
 
-eg: given_password = "crypto"
-L = 6
-padded_password = "crypto"+"___________"+"X" where ascii("X") = 6
-                             58 times
+   eg: given_password = "crypto"
+   L = 6
+   padded_password = "crypto"+"___________"+"<chr>" where ascii("<chr>") = 6
+                                58 times
 
-Hence, every password is now represented as a (L + 64-L + 1 = 65) bytes string.
+   Hence, every password is now represented as
+   a (L + 64-L + 1 = 65) bytes string.
 
-For recovering the actual password from the padded password, we should follow the method given below:
+   For recovering the actual password from the padded password,
+   we should follow the method given below:
 
-L = ascii value of character at position 65 of padded_password
-given_password = characters of padded_password from position 1 to L
+   L = ascii value of character at position 65 of padded_password
+   given_password = characters of padded_password from position 1 to L
 
-As every password is represented with the same length (65), the adversary cannot learn any information about the lengths of the password.
+   As every password is represented with the same length (65),
+   the adversary cannot learn any information about the lengths of the 
+   password.
 
+==============================================================================
 
 2) Method used for preventing swap attacks
 Ans:
-The swap attack corresponds to an attack where the adversary interchanges the values corresponding to different keys. This basically means that we should protect the integrity of every record (domain + password). The method used to defend against swap attacks is described below:
+  The swap attack corresponds to an attack where the adversary interchanges
+  the values corresponding to different keys.
+  This basically means that we should protect the integrity of every record
+  (domain + password).
+  The method used to defend against swap attacks is described below:
 
-Each record is stored as follows:
-HMAC(key_domain, domain_name) -> GCM(key_record, domain_name||padded_password)
+  Each record is stored as follows:
+  HMAC(key_domain, domain_name)
+    -> GCM(key_record, domain_name||padded_password)
 
-The password is recovered for any domain_name by decrypting using GCM and stripping off the domain_name
+  The password is recovered for any domain_name by decrypting using GCM and
+  stripping off the domain_name. This domain name is validated against the
+  key of the record too.
 
-Proof that this method defends against swap attacks:
-KVS has
-domain1 -> passwd1
-domain2 -> passwd2
+  Proof that this method defends against swap attacks:
+  KVS has
+  domain1 -> passwd1
+  domain2 -> passwd2
 
-GCM is secure
-Assume that the adversary is able to perform a swap attack.
-domain1 -> passwd2
+  GCM is secure
+  Assume that the adversary is able to perform a swap attack.
+  domain1 -> passwd2
 
-This implies that, the adversary was able to come up with GCM(key_record, domain1||passwd2) given GCM(key_record, domain1||passwd1), 
-GCM(key_record, domain2||passwd2). That is, the adversary was able to predict the output of GCM for a completely new input.
+  This implies that, the adversary was able to come up with
+  GCM(key_record, domain1||passwd2)
+  given the following two:
+  GCM(key_record, domain1||passwd1), 
+  GCM(key_record, domain2||passwd2).
+  That is, the adversary was able to predict the output of GCM 
+  for a completely new input, without having the key.
 
-This breaks the the security of GCM (producing a new (value, tag) pair breaks the MAC), which is a contradiction as GCM is secure.
-Hence, the given method protects against swap attacks.
+  This breaks the the security of GCM.
+  We have M, we don't have K, still, we produced GCM(K, M)
+  Note that, having GCM(K, M1||M2) and GCM(K, M3||M4) does not help in any way
+  to get GCM(K, M1||M4).
+  Hence, the given method protects against swap attacks.
 
+==============================================================================
 
+3) In our proposed defense against the rollback attack,
+   we assume that we can store the SHA-256 hash in a trusted location beyond
+   the reach of an adversary. Is it necessary to assume that such a trusted 
+   location exists, in order to defend against rollback attacks?
+   Brieﬂy justify your answer.
+Ans:
+   It is necessary to assume that a trusted storage exists. Say, there is no
+   trusted storage. Then, whatever information we store, the adversary has 
+   access to it. Let's say, we store Data1 to disc at time T1. 
+   - Adversary has access to whole of Data1. They copy it.
+   Then, say, we load it, make some modifications and store the modified
+   version, Data2 to disc at time T2.
+   - At this point, the adversary can simply swap Data2 with Data1.
+   As we did not maintain any state outside Data2 or Data1, we have no way of
+   differntiating between those two, as both of those are valid.
+   In this case, a 100% rollback can be made, without any way of detecting.
 
+   We overcame this by storing small amount of state (SHA256 hash,
+   or a counter). This made sure that the adversary doesn't have write access
+   to all the stored information, rendering the rollback incomplete.
+
+==============================================================================
+
+4) What if we had used a different MAC (other than HMAC) on the domain names
+   to produce the keys for the key-value store?
+   Would the scheme still satisfy the desired security properties?
+   Either show this, or give an example of a secure MAC for which the
+   resulting password manager implementation would be insecure.
+Ans:
+   Any MAC would do.
+   The worst (in a sense) a MAC can do is not provide any secrecy at all, i.e.
+   the domain names are as good as stored in plain text.
+   Example of such a MAC: domain name || HMAC (domain name)
+   
+   We claim that even this MAC satisfies the security requirements.
+
+   consider the record,
+      domain_name.com -> GCM (K, domain_name.com || password)
+   
+   The record can not be tampered with at all because we do not have K.
+   Also, gaining information about password is as good as breaking GCM.
+
+==============================================================================
+
+5) In our speciﬁcation, we leak the number of records in the password manager.
+   Describe an approach to reduce or completely eliminate the information 
+   leaked about the number of records.
+Ans:
+   1. Completely eliminate the information leaked.
+   -> Have an upper bound on number of records.
+      Have the KVS always full, with spurious records.
+      Here, we sketch a method to create spurious records:
+      use strings of form "____________<num>" for domain names,
+      and use "password" as password for all of those. As and when we
+      need space for actual records, we delete one of these records.
+      This can easily be done by keeping track of next smallest <num> to
+      delete and incrementing it each time. Also, when we delete a record,
+      we add a suprious record in its place.
+      example records: __________1 : password
+                       __________2 : password and so on...
+
+   2. Reduce the amount of information leaked.
+   -> We use the same method of keeping spurious records as above.
+      This time, we allow, say, the KVS to hold any integer multiple of a
+      number number of records. For example, say we choose that number to
+      be 256. Then, we begin with a KVS of size 256, completely filled with
+      spurious records. As long as we don't exceed 256, we go on adding 
+      records by replacing these suprious ones. Once there are no more
+      such records to replace, we add another 256 of spurious records,
+      making the KVS size 512. Thus, if one knows that the size of KVS is
+      N x 256, we leak the information that number of useful records is
+      greater than (N-1) x 256, less than or equal to N x 256.
+
+      This was more like arithmetic progression. We can similarly employ
+      something on the lines of geometric progremsion, doubling/halving
+      the size of KVS each time. In this model, if it is known that KVS has
+      size N, we leak the information that the number of useful records is
+      greater than N/2, less than or equal to N.
+      
+==============================================================================
+
+Some explanation for design decisions:
+
+1) Generation of more than one secret key from master password.
+-> master key = pbkdf (master password, fixed salt)
+   another key = HMAC (master key, fixed and key specific data)
+   (for details, have a look at the code)
+   Claim : the keys thus generated are indistinguishable from random.
+   Proof sketch: pbkdf is a PRF. Hence master key is indistinguishable from
+                 a random key.
+                 HMAC is a PRP, hence, the distribution of keys generated by
+                 HMAC (master key, . ) is indistinguishable from a truly
+                 random distribution of random keys.
+
+2) Just storing a count in secure storage.
+-> Every time we store, we increment a counter. We include the counter value
+   in the data to store, and then we encrypt this data. Note that this is
+   authentication encryption, so no tampering is possible. The only way to
+   provide valid data is to provide old data.
+   
+   Having said that, the trusted storage stores the current counter value,
+   hence, of all possible stored data (which can be validated by dec_gcm),
+   only the latest would tally with the counter value stored in the trusted
+   storage.
+
+   NOTE: we have added a flag `keychain.JUST_STORE_COUNT`.
+         when the flag is set to true, the password manager is in the
+         "extra credit" mode, otherwise, it uses SHA256 hashes to counter
+         rollback attacks.
+
+         This way, even if our counter based implementation turns out to be
+         flawed, we demonstrate that we have successfully finished the
+         mandatory part of the project.
+
+3) Checking master password.
+-> As it came up in one of the office hours we attended, we found out from
+   the TAs that it won't attract any penalty / deductions if we wait for
+   the decryption of the entire disk-stored-data to fail for us to recognize
+   that the master password provided is wrong. (linear time)
+
+   Given that, we just encrypt the entire data-to-be-disk-stored before
+   dumping it. While loading, we use the master password provided. If it
+   fails to decrypt the data-to-load, we conclude that the provided password
+   is a wrong one.
+
+   side-effects:
+     Given our implementation, we do not really need to provide exclusive
+     protection against swap attacks. Only representations that can be loaded
+     in our program are the ones which were previously stored and which were
+     not tampered in any way. Swap attack constituse as a tampering, hence
+     in case of swap attack, the decryption itself would fail.
+
+     Still, we have provided an explicit defence and detection against swap
+     attacks in case we decide to choose another method of validating master
+     password.
+
+   alternative:
+     One alternative that we have thought of is following.
+     KVS records are HMAC(domain) -> GCM(domain||padded_password)
+     We store this KVS in plain.
+     Along with the KVS, we also store encryption of a pre-decided string.
+     Say, "Keep it safe, keep it secret." GCM(hardcoded_phrase).
+     Now, while loading, we conclude that the password provided is invalid
+     if the decryption of GCM(hardcoded_phrase) fails.
+     
+     In this alternative, wrong-password-detection is constant time. But this
+     one does not come with built-it swap prevension, but again that isn't a
+     problem as we have anyway provided explicit protection against swap
+     attacks.
+
+     But this approach gives rise to various new types of error conditions.
+     For example, what if we give a KVS which used a different master password
+     as key? (note, the hardcoded_phrase was still encrypted using the correct
+     master password)
+     In that case, loading would succeed, but get queries would return null
+     almost all the times.

@@ -40,9 +40,8 @@ var keychain = function() {
         secrets: {
             k: 0,
             key_domain: 0,
-            key_password: 0,
-            key_data: 0,
-            key_unknown: 0
+            key_record: 0,
+            key_data: 0
         },
         data: { 
             kvs : {},
@@ -57,6 +56,10 @@ var keychain = function() {
     var ready = false;
 
     var keychain = {};
+    
+    // Are we just storing a count or an hash in trusted data storage?
+    keychain.JUST_STORE_COUNT = false; // set to true to check extra credit
+                                       // portion.
     
     // Takes a password of length 64 or less.
     // Returns a string of exactly 65 length.
@@ -115,10 +118,6 @@ var keychain = function() {
         ); 
     };
     
-    keychain.get_password_enc_key = function (master_key) {
-        return keychain.get_enc_key (master_key, "encrypt password");
-    };
-
     keychain.get_record_enc_key = function (master_key) {
         return keychain.get_enc_key (master_key, "encrypt record");
     };
@@ -131,10 +130,6 @@ var keychain = function() {
         priv.secrets.key_master = keychain.get_master_key (password);
         
         priv.secrets.key_domain = keychain.get_domain_hmac_key (
-            priv.secrets.key_master
-        );
-
-        priv.secrets.key_password = keychain.get_password_enc_key (
             priv.secrets.key_master
         );
 
@@ -164,8 +159,9 @@ var keychain = function() {
     /**
      * Loads the keychain state from the provided representation (repr). The
      * repr variable will contain a JSON encoded serialization of the contents
-     * of the KEYCHAIN (as returned by the save function). The trusted_data_check
-     * is an *optional* SHA-256 checksum that can be used to validate the 
+     * of the KEYCHAIN (as returned by the save function).
+     * The trusted_data_check is an *optional* SHA-256 checksum
+     * that can be used to validate the 
      * integrity of the contents of the KEYCHAIN.
      * 
      * If the checksum is provided and the integrity check fails,
@@ -199,22 +195,25 @@ var keychain = function() {
         catch (e) {
             return false;
         }
-
-        //if (trusted_data_check !== undefined) {
-            //Check for integrity
-        //    var check_tag = SHA256 (encrypted_data);
-        //    if (! bitarray_equal (trusted_data_check, check_tag)) {
-        //        throw "KEYCHAIN has been tampered with";
-        //    }
-        //}
         
         priv.data = JSON.parse (data_json);
-        if (trusted_data_check !== undefined) {
-            //Check for integrity
-            if (trusted_data_check != priv.data.counter)
-                throw "KEYCHAIN has been tampered with";
-        }
 
+        if (trusted_data_check !== undefined) {
+            // Extra credit : trusted_data_check is just a number.
+            if (typeof trusted_data_check == "number") {
+                if (trusted_data_check != priv.data.counter) {
+                    console.log (trusted_data_check, priv.data.counter);
+                    throw "Keychain has been tampered with";
+                }
+            }
+            // trusted_data_check is the SHA256 check.
+            else {
+                var check_tag = SHA256 (encrypted_data);
+                if (! bitarray_equal (trusted_data_check, check_tag)) {
+                    throw "Keychain has been tampered with";
+                }
+            }
+        }
 
         keychain.init (password);
         return true;    
@@ -237,23 +236,32 @@ var keychain = function() {
      */ 
     keychain.dump = function() {
         if (!ready) return null;
-       
+
         priv.data.counter += 1;
         var data_string = JSON.stringify (priv.data);
         var encrypted_data = enc_gcm (priv.secrets.key_data,
                                       string_to_bitarray (data_string));
-        //var hash = SHA256 (encrypted_data);
-        //return [JSON.stringify ({encrypted_data:encrypted_data}), hash];
-        return [JSON.stringify ({encrypted_data:encrypted_data}), priv.data.counter];
-
+        
+        if (keychain.JUST_STORE_COUNT) {
+            // Extra credit portion.
+            return [JSON.stringify ({encrypted_data:encrypted_data}),
+                    priv.data.counter];
+            
+        }
+        else {
+            var hash = SHA256 (encrypted_data);
+            return [JSON.stringify ({encrypted_data:encrypted_data}),
+                    hash];
+        }
     };
 
     /**
      * Fetches the data (as a string)
-     * corresponding to the given domain from the KEYCHAIN.
-For a swap attack, the adversary must produce a (domain_name+password), Tag pair. 
+     * corresponding to the given domain from the keychain.
+     * For a swap attack, the adversary must produce a
+     * (domain_name + password), Tag pair. 
      * 
-     * If there is no entry in the KEYCHAIN that matches the given domain,
+     * If there is no entry in the keychain that matches the given domain,
      * then return null.
      * 
      * If the password manager is not in a ready state, throw an exception.
@@ -273,40 +281,40 @@ For a swap attack, the adversary must produce a (domain_name+password), Tag pair
 
         var record;
         try {
-            record = dec_gcm(priv.secrets.key_record, priv.data.kvs [domain_hmac]);
+            record = bitarray_to_string (
+                dec_gcm (priv.secrets.key_record,
+                         priv.data.kvs [domain_hmac])
+            );
         }
         catch (e) {
-            throw "Maybe a case of swap attack";
+            throw "Encrypted password for " + domain_name + " tampered.";
         }
         
-        var padded_password = bitarray_to_string(record).slice(domain_name.length, domain_name.length + MAX_PW_LEN_BYTES+1)
-        // Recordc exists. Check tampering first.
-        //var stored_tag = priv.data [domain_hmac].record_tag;
-        //var decrypted_tag = dec_gcm (priv.secrets.key_record, stored_tag);
-        //var record = bitarray_concat (
-        //    domain_hmac, 
-        //    priv.data [domain_hmac].encrypted_password
-        //);
-        //if (! bitarray_equal (decrypted_tag, record)) {
-            // Might be a case of swap attack!!
-        //    throw ("Record for " + domain_name + " was tampered with.");
-        //}
+        // Check for a swap attack.
+        var original_domain = record.slice (0,
+                                            record.length
+                                            - MAX_PW_LEN_BYTES
+                                            - 1);
+        if (original_domain != domain_name) {
+            throw "Detected a swap attack for " + domain_name;
+        }
         
-        return keychain.strip_password(padded_password)    
-        // No tampering, now return the password.
-        //return keychain.strip_password (
-        //    bitarray_to_string (
-        //        dec_gcm (
-        //            priv.secrets.key_password,
-        //            priv.data [domain_hmac].encrypted_password
-        //        )
-        //    )
-        //);
+        // Now we are sure that there was no tampering,
+        // And no swap attack too.
+
+        // We have encrypted domain_name||padded_password
+        var padded_password =
+            record
+            .slice (domain_name.length,
+                    domain_name.length + MAX_PW_LEN_BYTES + 1);
+        
+        return keychain.strip_password (padded_password);
     };
 
     /** 
-     * Inserts the domain and associated data into the KEYCHAIN. If the domain is
-     * already in the password manager, this method should update its value.
+     * Inserts the domain and associated data into the Keychain.
+     * If the domain is already in the password manager,
+     * this method should update its value.
      * If not, create a new entry in the password manager.
      * If the password manager is not in a ready state, throw an exception.
      *
@@ -318,19 +326,13 @@ For a swap attack, the adversary must produce a (domain_name+password), Tag pair
     keychain.set = function (domain_name, password) {
         if (!ready) throw "Not ready";
 
-        password = keychain.pad_password (password);
+        var padded_password = keychain.pad_password (password);
         var domain_hmac = HMAC (priv.secrets.key_domain, domain_name);
-        //var encrypted_password = enc_gcm (priv.secrets.key_password,
-        //                                  string_to_bitarray (password));
-        //var record_tag = enc_gcm (priv.secrets.key_record,
-        //                          bitarray_concat (domain_hmac,
-        //                                           encrypted_password));
-        var encrypted_record = enc_gcm(priv.secrets.key_record, string_to_bitarray(domain_name+password))
-        //priv.data [domain_hmac] = {
-        //    encrypted_password : encrypted_password,
-        //    record_tag: record_tag
-        //};
-        priv.data.kvs[domain_hmac] = encrypted_record;
+        var encrypted_value = enc_gcm (
+            priv.secrets.key_record,
+            string_to_bitarray (domain_name + padded_password)
+        );
+        priv.data.kvs [domain_hmac] = encrypted_value;
     };
 
     /**
