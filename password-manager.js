@@ -44,7 +44,10 @@ var keychain = function() {
             key_data: 0,
             key_unknown: 0
         },
-        data: { /* Non-secret data here */ }
+        data: { 
+            kvs : {},
+            counter : 0
+        }
     };
 
     // Maximum length of each password in bytes.
@@ -197,15 +200,23 @@ var keychain = function() {
             return false;
         }
 
+        //if (trusted_data_check !== undefined) {
+            //Check for integrity
+        //    var check_tag = SHA256 (encrypted_data);
+        //    if (! bitarray_equal (trusted_data_check, check_tag)) {
+        //        throw "KEYCHAIN has been tampered with";
+        //    }
+        //}
+        
+        priv.data = JSON.parse (data_json);
         if (trusted_data_check !== undefined) {
             //Check for integrity
-            var check_tag = SHA256 (encrypted_data);
-            if (! bitarray_equal (trusted_data_check, check_tag)) {
+            if (trusted_data_check != priv.data.counter)
                 throw "KEYCHAIN has been tampered with";
-            }
         }
+
+
         keychain.init (password);
-        priv.data = JSON.parse (data_json);
         return true;    
     };
 
@@ -226,17 +237,21 @@ var keychain = function() {
      */ 
     keychain.dump = function() {
         if (!ready) return null;
-        
+       
+        priv.data.counter += 1;
         var data_string = JSON.stringify (priv.data);
         var encrypted_data = enc_gcm (priv.secrets.key_data,
                                       string_to_bitarray (data_string));
-        var hash = SHA256 (encrypted_data);
-        return [JSON.stringify ({encrypted_data:encrypted_data}), hash];
+        //var hash = SHA256 (encrypted_data);
+        //return [JSON.stringify ({encrypted_data:encrypted_data}), hash];
+        return [JSON.stringify ({encrypted_data:encrypted_data}), priv.data.counter];
+
     };
 
     /**
      * Fetches the data (as a string)
      * corresponding to the given domain from the KEYCHAIN.
+For a swap attack, the adversary must produce a (domain_name+password), Tag pair. 
      * 
      * If there is no entry in the KEYCHAIN that matches the given domain,
      * then return null.
@@ -254,29 +269,39 @@ var keychain = function() {
 
         var domain_hmac = HMAC (priv.secrets.key_domain, domain_name);
         
-        if (! (domain_hmac in priv.data)) return null;
+        if (! (domain_hmac in priv.data.kvs)) return null;
 
-        // Recordc exists. Check tampering first.
-        var stored_tag = priv.data [domain_hmac].record_tag;
-        var decrypted_tag = dec_gcm (priv.secrets.key_record, stored_tag);
-        var record = bitarray_concat (
-            domain_hmac, 
-            priv.data [domain_hmac].encrypted_password
-        );
-        if (! bitarray_equal (decrypted_tag, record)) {
-            // Might be a case of swap attack!!
-            throw ("Record for " + domain_name + " was tampered with.");
+        var record;
+        try {
+            record = dec_gcm(priv.secrets.key_record, priv.data.kvs [domain_hmac]);
+        }
+        catch (e) {
+            throw "Maybe a case of swap attack";
         }
         
+        var padded_password = bitarray_to_string(record).slice(domain_name.length, domain_name.length + MAX_PW_LEN_BYTES+1)
+        // Recordc exists. Check tampering first.
+        //var stored_tag = priv.data [domain_hmac].record_tag;
+        //var decrypted_tag = dec_gcm (priv.secrets.key_record, stored_tag);
+        //var record = bitarray_concat (
+        //    domain_hmac, 
+        //    priv.data [domain_hmac].encrypted_password
+        //);
+        //if (! bitarray_equal (decrypted_tag, record)) {
+            // Might be a case of swap attack!!
+        //    throw ("Record for " + domain_name + " was tampered with.");
+        //}
+        
+        return keychain.strip_password(padded_password)    
         // No tampering, now return the password.
-        return keychain.strip_password (
-            bitarray_to_string (
-                dec_gcm (
-                    priv.secrets.key_password,
-                    priv.data [domain_hmac].encrypted_password
-                )
-            )
-        );
+        //return keychain.strip_password (
+        //    bitarray_to_string (
+        //        dec_gcm (
+        //            priv.secrets.key_password,
+        //            priv.data [domain_hmac].encrypted_password
+        //        )
+        //    )
+        //);
     };
 
     /** 
@@ -295,15 +320,17 @@ var keychain = function() {
 
         password = keychain.pad_password (password);
         var domain_hmac = HMAC (priv.secrets.key_domain, domain_name);
-        var encrypted_password = enc_gcm (priv.secrets.key_password,
-                                          string_to_bitarray (password));
-        var record_tag = enc_gcm (priv.secrets.key_record,
-                                  bitarray_concat (domain_hmac,
-                                                   encrypted_password));
-        priv.data [domain_hmac] = {
-            encrypted_password : encrypted_password,
-            record_tag: record_tag
-        };
+        //var encrypted_password = enc_gcm (priv.secrets.key_password,
+        //                                  string_to_bitarray (password));
+        //var record_tag = enc_gcm (priv.secrets.key_record,
+        //                          bitarray_concat (domain_hmac,
+        //                                           encrypted_password));
+        var encrypted_record = enc_gcm(priv.secrets.key_record, string_to_bitarray(domain_name+password))
+        //priv.data [domain_hmac] = {
+        //    encrypted_password : encrypted_password,
+        //    record_tag: record_tag
+        //};
+        priv.data.kvs[domain_hmac] = encrypted_record;
     };
 
     /**
@@ -321,8 +348,8 @@ var keychain = function() {
     keychain.remove = function (domain_name) {
         if (!ready) throw "Not ready";
         var domain_hmac = HMAC (priv.secrets.key_domain, domain_name);
-        if (domain_hmac in priv.data) {
-            delete priv.data [domain_hmac];
+        if (domain_hmac in priv.data.kvs) {
+            delete priv.data.kvs [domain_hmac];
             return true;
         }
         else {
